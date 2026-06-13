@@ -3227,7 +3227,10 @@ impl Node {
         // Step 3. Return the XML serialization of node given require well-formed.
         // TODO: xml5ever doesn't seem to want require_well_formed
         let _ = require_well_formed;
-        self.xml_serialize(xml_serialize::TraversalScope::ChildrenOnly(None))
+        self.xml_serialize(
+            xml_serialize::TraversalScope::ChildrenOnly(None),
+            SerializationStyleBaking::None,
+        )
     }
 
     pub(crate) fn get_next_sibling_unrooted<'a>(
