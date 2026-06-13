@@ -19,6 +19,7 @@ use script_bindings::trace::CustomTraceable;
 use servo_url::ServoUrl;
 use style::attr::AttrValue;
 use style::context::QuirksMode as StyleContextQuirksMode;
+use style::properties::{LonghandId, PropertyDeclarationId};
 use xml5ever::LocalName;
 
 use crate::dom::bindings::codegen::Bindings::HTMLTemplateElementBinding::HTMLTemplateElementMethods;
@@ -127,13 +128,86 @@ impl Tokenizer {
     }
 }
 
+/// The longhands whose computed values are baked into the serialized `style`
+/// attribute when [`SerializationStyleBaking::ComputedStyles`] is requested.
+///
+/// Servo paints inline SVG by serializing the subtree to a `data:` URL and
+/// rasterizing it externally (usvg), so only markup survives: presentation
+/// attributes and inline styles reach the rasterizer, but author stylesheet
+/// rules, HTML-inherited values (e.g. `color` for `currentColor`), and
+/// `var()`-derived values are lost. Baking the cascade's computed values for
+/// the paint-relevant longhands into each element's `style` attribute carries
+/// the real cascade into the rasterized output. See servo issue #45318.
+const BAKED_LONGHANDS: &[LonghandId] = &[
+    LonghandId::Fill,
+    LonghandId::FillOpacity,
+    LonghandId::FillRule,
+    LonghandId::Stroke,
+    LonghandId::StrokeWidth,
+    LonghandId::StrokeOpacity,
+    LonghandId::StrokeDasharray,
+    LonghandId::StrokeDashoffset,
+    LonghandId::StrokeMiterlimit,
+    LonghandId::StrokeLinecap,
+    LonghandId::StrokeLinejoin,
+    LonghandId::Color,
+    LonghandId::Opacity,
+    LonghandId::FontFamily,
+    LonghandId::FontSize,
+    LonghandId::FontWeight,
+    LonghandId::FontStyle,
+    LonghandId::LetterSpacing,
+    LonghandId::Visibility,
+];
+
+/// Whether serialization should bake computed styles into `style` attributes.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum SerializationStyleBaking {
+    /// Serialize markup verbatim (the spec-compliant default).
+    None,
+    /// Append the computed values of [`BAKED_LONGHANDS`] to each element's
+    /// `style` attribute, so a standalone parse of the output reproduces the
+    /// document's cascade. Only used for SVG serialize-for-rasterization.
+    ComputedStyles,
+}
+
+/// Computed-style declarations for [`BAKED_LONGHANDS`], or `None` when the
+/// element has no style data (e.g. it was never styled, or sits inside a
+/// `display: none` subtree).
+fn baked_computed_style_declarations(element: &Element) -> Option<String> {
+    let style = element.cached_style()?;
+    let mut css = String::new();
+    for longhand in BAKED_LONGHANDS {
+        let value = style.computed_value_to_string(PropertyDeclarationId::Longhand(*longhand));
+        if value.is_empty() {
+            continue;
+        }
+        if !css.is_empty() {
+            css.push_str("; ");
+        }
+        css.push_str(longhand.name());
+        css.push_str(": ");
+        css.push_str(&value);
+    }
+    (!css.is_empty()).then_some(css)
+}
+
 /// <https://html.spec.whatwg.org/multipage/#html-fragment-serialisation-algorithm>
-fn start_element<S: Serializer>(element: &Element, serializer: &mut S) -> io::Result<()> {
+fn start_element<S: Serializer>(
+    element: &Element,
+    serializer: &mut S,
+    style_baking: SerializationStyleBaking,
+) -> io::Result<()> {
     let name = QualName::new(
         None,
         element.namespace().clone(),
         element.local_name().clone(),
     );
+
+    let baked_style = match style_baking {
+        SerializationStyleBaking::None => None,
+        SerializationStyleBaking::ComputedStyles => baked_computed_style_declarations(element),
+    };
 
     let mut attributes = vec![];
 
@@ -147,12 +221,33 @@ fn start_element<S: Serializer>(element: &Element, serializer: &mut S) -> io::Re
         attributes.push((qualified_name, AttrValue::String(is_value.to_string())));
     }
 
-    // Collect all the "normal" attributes
-    attributes.extend(element.attrs().borrow().iter().map(|attr| {
+    // Collect all the "normal" attributes. When baking computed styles, the
+    // literal `style` attribute is captured separately and re-emitted with the
+    // baked declarations appended (later declarations win, so baked computed
+    // values override the allowlisted properties while non-baked literal
+    // declarations — e.g. `transform` — survive verbatim).
+    let mut literal_style = None;
+    attributes.extend(element.attrs().borrow().iter().filter_map(|attr| {
+        if baked_style.is_some() &&
+            attr.namespace() == &ns!() &&
+            attr.local_name() == &local_name!("style")
+        {
+            literal_style = Some(attr.value().to_string());
+            return None;
+        }
         let qname = QualName::new(None, attr.namespace().clone(), attr.local_name().clone());
         let value = attr.value().clone();
-        (qname, value)
+        Some((qname, value))
     }));
+
+    if let Some(baked) = baked_style {
+        let css = match literal_style {
+            Some(literal) => format!("{literal}; {baked}"),
+            None => baked,
+        };
+        let qualified_name = QualName::new(None, ns!(), local_name!("style"));
+        attributes.push((qualified_name, AttrValue::String(css)));
+    }
 
     let attr_refs = attributes.iter().map(|(qname, value)| {
         let ar: AttrRef = (qname, &**value);
@@ -290,6 +385,7 @@ pub(crate) fn serialize_html_fragment<S: Serializer>(
     traversal_scope: TraversalScope,
     serialize_shadow_roots: bool,
     shadow_roots: Vec<DomRoot<ShadowRoot>>,
+    style_baking: SerializationStyleBaking,
 ) -> io::Result<()> {
     let iter = SerializationIterator::new(
         cx,
@@ -302,7 +398,7 @@ pub(crate) fn serialize_html_fragment<S: Serializer>(
     for cmd in iter {
         match cmd {
             SerializationCommand::OpenElement(n) => {
-                start_element(&n, serializer)?;
+                start_element(&n, serializer, style_baking)?;
             },
             SerializationCommand::CloseElement(name) => {
                 serializer.end_elem(name)?;
@@ -374,11 +470,26 @@ pub(crate) fn serialize_html_fragment<S: Serializer>(
 
 pub(crate) struct HtmlSerialize<'a> {
     node: &'a Node,
+    style_baking: SerializationStyleBaking,
 }
 
 impl<'a> HtmlSerialize<'a> {
     pub(crate) fn new(node: &'a Node) -> HtmlSerialize<'a> {
-        HtmlSerialize { node }
+        HtmlSerialize {
+            node,
+            style_baking: SerializationStyleBaking::None,
+        }
+    }
+
+    /// A serializer that bakes the computed values of paint-relevant
+    /// longhands into each element's `style` attribute. Used when
+    /// serializing inline SVG for external rasterization, so the document's
+    /// CSS cascade survives the round-trip through markup.
+    pub(crate) fn with_computed_style_baking(node: &'a Node) -> HtmlSerialize<'a> {
+        HtmlSerialize {
+            node,
+            style_baking: SerializationStyleBaking::ComputedStyles,
+        }
     }
 }
 
@@ -391,6 +502,14 @@ impl Serialize for HtmlSerialize<'_> {
         // TODO: https://github.com/servo/servo/issues/42839
         let mut cx = unsafe { temp_cx() };
         let cx = &mut cx;
-        serialize_html_fragment(cx, self.node, serializer, traversal_scope, false, vec![])
+        serialize_html_fragment(
+            cx,
+            self.node,
+            serializer,
+            traversal_scope,
+            false,
+            vec![],
+            self.style_baking,
+        )
     }
 }

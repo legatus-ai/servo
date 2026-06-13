@@ -111,7 +111,7 @@ use crate::dom::node::nodelist::NodeList;
 use crate::dom::pointerevent::{PointerEvent, PointerId};
 use crate::dom::range::WeakRangeVec;
 use crate::dom::raredata::NodeRareData;
-use crate::dom::servoparser::html::HtmlSerialize;
+use crate::dom::servoparser::html::{HtmlSerialize, SerializationStyleBaking};
 use crate::dom::servoparser::serialize_html_fragment;
 use crate::dom::shadowroot::{IsUserAgentWidget, ShadowRoot};
 use crate::dom::text::Text;
@@ -3164,6 +3164,7 @@ impl Node {
             traversal_scope,
             serialize_shadow_roots,
             shadow_roots,
+            SerializationStyleBaking::None,
         )
         .expect("Serializing node failed");
 
@@ -3175,11 +3176,18 @@ impl Node {
     pub(crate) fn xml_serialize(
         &self,
         traversal_scope: xml_serialize::TraversalScope,
+        style_baking: SerializationStyleBaking,
     ) -> Fallible<DOMString> {
+        let serialize = match style_baking {
+            SerializationStyleBaking::None => HtmlSerialize::new(self),
+            SerializationStyleBaking::ComputedStyles => {
+                HtmlSerialize::with_computed_style_baking(self)
+            },
+        };
         let mut writer = vec![];
         xml_serialize::serialize(
             &mut writer,
-            &HtmlSerialize::new(self),
+            &serialize,
             xml_serialize::SerializeOpts { traversal_scope },
         )
         .map_err(|error| {

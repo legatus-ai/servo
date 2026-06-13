@@ -454,14 +454,14 @@ codegen-units = 1
 # Or for Stylo:
 #
 [patch."https://github.com/servo/stylo"]
-selectors = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
-servo_arc = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
-stylo = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
-stylo_atoms = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
-stylo_dom = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
-stylo_malloc_size_of = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
-stylo_static_prefs = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
-stylo_traits = { git = "https://github.com/mu-mostafa98/stylo", branch = "enable-svg-styling-for-servo" }
+selectors = { path = "../stylo-fork/selectors" }
+servo_arc = { path = "../stylo-fork/servo_arc" }
+stylo = { path = "../stylo-fork/style" }
+stylo_atoms = { path = "../stylo-fork/stylo_atoms" }
+stylo_dom = { path = "../stylo-fork/stylo_dom" }
+stylo_malloc_size_of = { path = "../stylo-fork/malloc_size_of" }
+stylo_static_prefs = { path = "../stylo-fork/stylo_static_prefs" }
+stylo_traits = { path = "../stylo-fork/style_traits" }
 #
 # Or for another Git dependency:
 #

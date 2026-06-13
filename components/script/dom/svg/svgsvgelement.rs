@@ -31,6 +31,7 @@ use crate::dom::iterators::ShadowIncluding;
 use crate::dom::node::{
     ChildrenMutation, CloneChildrenFlag, Node, NodeDamage, NodeTraits, UnbindContext,
 };
+use crate::dom::servoparser::html::SerializationStyleBaking;
 use crate::dom::svg::svggraphicselement::SVGGraphicsElement;
 use crate::dom::virtualmethods::VirtualMethods;
 
@@ -77,9 +78,14 @@ impl SVGSVGElement {
     pub(crate) fn serialize_and_cache_subtree(&self, cx: &mut js::context::JSContext) {
         let cloned_nodes = self.process_use_elements(cx);
 
-        let serialize_result = self
-            .upcast::<Node>()
-            .xml_serialize(TraversalScope::IncludeNode);
+        // Bake the document's computed styles into the serialized markup:
+        // the rasterizer parses this SVG standalone, so author stylesheet
+        // rules, HTML-inherited `color` (for `currentColor`), and `var()`
+        // values only survive if carried in `style` attributes.
+        let serialize_result = self.upcast::<Node>().xml_serialize(
+            TraversalScope::IncludeNode,
+            SerializationStyleBaking::ComputedStyles,
+        );
 
         self.cleanup_cloned_nodes(cx, &cloned_nodes);
 

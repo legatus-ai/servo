@@ -167,6 +167,7 @@ use crate::dom::raredata::ElementRareData;
 use crate::dom::sanitizer::Sanitizer;
 use crate::dom::scrolling_box::{ScrollAxisState, ScrollingBox};
 use crate::dom::servoparser::ServoParser;
+use crate::dom::servoparser::html::SerializationStyleBaking;
 use crate::dom::shadowroot::{IsUserAgentWidget, ShadowRoot};
 use crate::dom::svg::svgelement::SVGElement;
 use crate::dom::text::Text;
@@ -998,6 +999,18 @@ impl Element {
 
     pub(crate) fn style(&self) -> Option<ServoArc<ComputedValues>> {
         self.owner_window().layout_reflow(QueryMsg::StyleQuery);
+        self.style_data
+            .borrow()
+            .as_ref()
+            .map(|data| data.element_data.borrow().styles.primary().clone())
+    }
+
+    /// Like [`Element::style`], but without forcing a reflow first: the
+    /// primary `ComputedValues` from the most recent style pass, if this
+    /// element was styled by it. Used by serialization paths that run
+    /// immediately after a reflow (e.g. SVG serialize-for-rasterization),
+    /// where triggering a re-entrant reflow would be incorrect.
+    pub(crate) fn cached_style(&self) -> Option<ServoArc<ComputedValues>> {
         self.style_data
             .borrow()
             .as_ref()
@@ -3603,7 +3616,7 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
                 .html_serialize(cx, ChildrenOnly(Some(qname)), false, vec![])
         } else {
             self.upcast::<Node>()
-                .xml_serialize(XmlChildrenOnly(Some(qname)))?
+                .xml_serialize(XmlChildrenOnly(Some(qname)), SerializationStyleBaking::None)?
         };
 
         Ok(TrustedHTMLOrNullIsEmptyString::NullIsEmptyString(result))
@@ -3663,7 +3676,7 @@ impl ElementMethods<crate::DomTypeHolder> for Element {
             self.upcast::<Node>()
                 .html_serialize(cx, IncludeNode, false, vec![])
         } else {
-            self.upcast::<Node>().xml_serialize(XmlIncludeNode)?
+            self.upcast::<Node>().xml_serialize(XmlIncludeNode, SerializationStyleBaking::None)?
         };
 
         Ok(TrustedHTMLOrNullIsEmptyString::NullIsEmptyString(result))
