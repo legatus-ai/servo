@@ -1,0 +1,390 @@
+# Weekly upstream sync for legatus-ai/servo (
+fork of servo/servo).
+#
+# What: merges servo/
+servo:main into a dated branch off legatus-
+svg and opens
+# a PR. On non-trivial conflict
+, opens an issue instead. The companion
+# `sc
+ripts/fork-sync.sh` does the same thing local
+ly for ad-hoc syncs.
+#
+# Why: the SVG CSS pat
+ches this fork carries are small (3 commits) 
+but upstream
+# servo moves ~20 commits/day. W
+eekly sync keeps the merge trivial; letting i
+t
+# slide turns a 5-minute job into a multi-h
+our conflict session.
+#
+# The Cargo.lock conf
+lict that almost always appears (stylo crate 
+rev pins) is
+# auto-resolved by taking upstre
+am's lock — see inline comment for why that
+'s
+# safe.
+
+name: fork-upstream-sync
+
+on:
+  s
+chedule:
+    # Sundays at 09:05 UTC — quiet
+ time for upstream, gives the PR a week to
+  
+  # bake before the next sync attempt. Random
+ minute offset to avoid
+    # GitHub's schedu
+ler thundering herd.
+    - cron: '5 9 * * 0'
+
+  workflow_dispatch:
+    inputs:
+      dry_ru
+n:
+        description: 'Run the merge but do
+ not push or open a PR'
+        type: boolean
+
+        default: false
+
+permissions:
+  conte
+nts: write      # push the sync branch
+  pull
+-requests: write # open the sync PR
+  issues:
+ write        # open an issue if the merge co
+nflicts non-trivially
+
+jobs:
+  sync:
+    if: 
+github.repository == 'legatus-ai/servo'
+    r
+uns-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout legatus-sv
+g
+        uses: actions/checkout@v4
+        w
+ith:
+          ref: legatus-svg
+          fet
+ch-depth: 0   # full history so the merge has
+ a real base
+          persist-credentials: t
+rue
+
+      - name: Configure git identity
+   
+     run: |
+          git config user.name  "
+legatus-ai-bot"
+          git config user.ema
+il "bot@users.noreply.github.com"
+
+      - na
+me: Add upstream servo remote
+        run: |
+
+          if ! git remote get-url upstream >/
+dev/null 2>&1; then
+            git remote ad
+d upstream https://github.com/servo/servo.git
+
+          fi
+          git fetch upstream ma
+ster --depth 500
+
+      - name: Capture sync 
+metadata
+        id: meta
+        run: |
+    
+      date="$(date -u +%Y-%m-%d)"
+          u
+pstream_sha="$(git rev-parse --short upstream
+/main)"
+          ahead_behind="$(git rev-l
+ist --left-right --count legatus-svg...upstre
+am/main)"
+          ahead="${ahead_behind%%
+ *}"
+          behind="${ahead_behind##* }"
+ 
+         echo "date=$date"               >> "
+$GITHUB_OUTPUT"
+          echo "upstream_sha=
+$upstream_sha" >> "$GITHUB_OUTPUT"
+          
+echo "ahead=$ahead"             >> "$GITHUB_O
+UTPUT"
+          echo "behind=$behind"       
+    >> "$GITHUB_OUTPUT"
+          echo "branc
+h=sync/auto-$date"   >> "$GITHUB_OUTPUT"
+
+   
+   - name: Skip if already up to date
+       
+ if: steps.meta.outputs.behind == '0'
+       
+ run: |
+          echo "::notice::legatus-svg
+ is already at upstream/main ($UPSTREAM_SHA
+); nothing to sync."
+        env:
+          U
+PSTREAM_SHA: ${{ steps.meta.outputs.upstream_
+sha }}
+
+      - name: Create sync branch + at
+tempt merge
+        if: steps.meta.outputs.be
+hind != '0'
+        id: merge
+        run: |
+
+          set -e
+          git checkout -B "$
+SYNC_BRANCH" legatus-svg
+          set +e
+   
+       git merge upstream/main --no-edit
+  
+        status=$?
+          set -e
+          
+if [ $status -eq 0 ]; then
+            echo "
+merge_status=clean" >> "$GITHUB_OUTPUT"
+     
+       exit 0
+          fi
+          # Auto-r
+esolve Cargo.lock conflicts by taking upstrea
+m's version.
+          # Rationale: servo's o
+wn Cargo.lock does not propagate when servo i
+s
+          # consumed as a git dep by versov
+iew-shim (each consumer generates
+          #
+ its own lock), so this lock only matters for
+ standalone servo
+          # development. Th
+e [patch."...servo/stylo"] block in Cargo.tom
+l
+          # (which redirects stylo crates t
+o ../stylo-fork for local dev) still
+        
+  # wins at build time.
+          if git diff
+ --name-only --diff-filter=U | grep -q '^Carg
+o.lock$'; then
+            git checkout --the
+irs Cargo.lock
+            git add Cargo.lock
+
+          fi
+          # Any remaining unmer
+ged paths? Bail with a structured flag.
+     
+     if git diff --name-only --diff-filter=U 
+| grep -q .; then
+            git merge --abo
+rt || true
+            echo "merge_status=con
+flict" >> "$GITHUB_OUTPUT"
+            git di
+ff --name-only --diff-filter=U > /tmp/conflic
+ts.txt
+            exit 0
+          fi
+      
+    git commit --no-edit
+          echo "merg
+e_status=autoresolved" >> "$GITHUB_OUTPUT"
+  
+      env:
+          SYNC_BRANCH: ${{ steps.m
+eta.outputs.branch }}
+
+      - name: Push syn
+c branch
+        if: steps.merge.outputs.merg
+e_status != 'conflict' && steps.meta.outputs.
+behind != '0' && github.event.inputs.dry_run 
+!= 'true'
+        run: git push -u origin "$S
+YNC_BRANCH"
+        env:
+          SYNC_BRANC
+H: ${{ steps.meta.outputs.branch }}
+
+      - 
+name: Open PR
+        if: steps.merge.outputs
+.merge_status != 'conflict' && steps.meta.out
+puts.behind != '0' && github.event.inputs.dry
+_run != 'true'
+        env:
+          GH_TOKE
+N: ${{ secrets.GITHUB_TOKEN }}
+          SYNC
+_BRANCH: ${{ steps.meta.outputs.branch }}
+   
+       DATE: ${{ steps.meta.outputs.date }}
+ 
+         UPSTREAM_SHA: ${{ steps.meta.outputs
+.upstream_sha }}
+          BEHIND: ${{ steps.
+meta.outputs.behind }}
+          MERGE_STATUS
+: ${{ steps.merge.outputs.merge_status }}
+   
+     run: |
+          case "$MERGE_STATUS" in
+
+            clean)        resolution="Clean 
+auto-merge, no conflicts." ;;
+            aut
+oresolved) resolution="Cargo.lock conflict au
+to-resolved (took upstream's lock — see wor
+kflow comment). All other files auto-merged."
+ ;;
+          esac
+          body=$(cat <<EOF
+
+          ## What
+
+          Weekly upstream
+ sync — merges \`servo/servo@main\` ($UPS
+TREAM_SHA) into \`legatus-svg\`.
+
+          -
+ **Upstream commits merged:** $BEHIND
+       
+   - **Conflict resolution:** $resolution
+
+  
+        Generated by \`.github/workflows/fork
+-upstream-sync.yml\`. Companion: \`scripts/fo
+rk-sync.sh\` for ad-hoc local runs.
+
+        
+  ## Verification
+
+          - Not built by t
+he workflow — engine build is the \`versovi
+ew-shim\` \`build-engine.yml\` job's responsi
+bility.
+          - After this merges, bump t
+he \`servo\` \`rev\` in [\`versoview-shim/Car
+go.toml\`](https://github.com/legatus-ai/vers
+oview-shim/blob/main/Cargo.toml) to the new \
+`legatus-svg\` HEAD.
+          EOF
+          
+)
+          gh pr create \
+            --repo
+ legatus-ai/servo \
+            --base legatu
+s-svg \
+            --head "$SYNC_BRANCH" \
+ 
+           --title "sync: merge upstream serv
+o/servo@main ($BEHIND commits, $DATE)" \
+  
+          --body "$body"
+
+      - name: Open 
+issue on conflict
+        if: steps.merge.out
+puts.merge_status == 'conflict' && github.eve
+nt.inputs.dry_run != 'true'
+        env:
+    
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+ 
+         UPSTREAM_SHA: ${{ steps.meta.outputs
+.upstream_sha }}
+          DATE: ${{ steps.me
+ta.outputs.date }}
+        run: |
+          c
+onflicts="$(cat /tmp/conflicts.txt | sed 's/^
+/ - /')"
+          body=$(cat <<EOF
+         
+ ## Weekly upstream sync failed to merge clea
+nly
+
+          \`servo/servo@main\` (\`$UPS
+TREAM_SHA\`) vs \`legatus-svg\` on $DATE.
+
+  
+        ### Conflicting files
+
+          $con
+flicts
+
+          ### Next steps
+
+          1
+. Run locally:
+             \`\`\`
+          
+   git fetch origin legatus-svg
+             
+git checkout -B manual-sync origin/legatus-sv
+g
+             git remote add upstream https:
+//github.com/servo/servo.git
+             git
+ fetch upstream main
+             git merge
+ upstream/main
+             # ... resolve .
+..
+             git push -u origin manual-syn
+c
+             \`\`\`
+          2. Open a PR 
+from \`manual-sync\` -> \`legatus-svg\`.
+    
+      3. Close this issue.
+
+          Generat
+ed by \`.github/workflows/fork-upstream-sync.
+yml\`.
+          EOF
+          )
+          gh
+ issue create \
+            --repo legatus-ai
+/servo \
+            --title "upstream sync c
+onflict ($DATE): $(echo "$conflicts" | wc -l)
+ files" \
+            --body "$body" \
+      
+      --label sync-conflict 2>/dev/null || \
+
+          gh issue create \
+            --rep
+o legatus-ai/servo \
+            --title "ups
+tream sync conflict ($DATE): $(echo "$conflic
+ts" | wc -l) files" \
+            --body "$bo
+dy"
+
+
