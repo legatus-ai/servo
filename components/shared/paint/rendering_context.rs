@@ -136,6 +136,10 @@ impl SurfmanRenderingContext {
                 print_diagnostics_information_on_context_creation_failure(&device, gl_api, version)
             })?;
 
+        // glow queries GL_VERSION while the context is constructed, so the
+        // Surfman context must be current before loading GL entry points.
+        device.make_context_current(&context)?;
+
         #[expect(unsafe_code)]
         let gleam_gl = {
             match gl_api {
@@ -923,19 +927,24 @@ fn print_diagnostics_information_on_context_creation_failure(
         .and_then(|context_descriptor| device.create_context(&context_descriptor, None))
     {
         Ok(mut context) => {
-            #[expect(unsafe_code)]
-            let glow_gl = unsafe {
-                glow::Context::from_loader_function(|function_name| {
-                    device.get_proc_address(&context, function_name)
-                })
-            };
+            if device.make_context_current(&context).is_ok() {
+                #[expect(unsafe_code)]
+                let glow_gl = unsafe {
+                    glow::Context::from_loader_function(|function_name| {
+                        device.get_proc_address(&context, function_name)
+                    })
+                };
 
-            println!(
-                "It's likely that your version of OpenGL ({:?}.{:?}) is too old.",
-                glow_gl.version().major,
-                glow_gl.version().minor
-            );
-            println!("If not, please file a bug at https://github.com/servo/servo/issues.");
+                println!(
+                    "It's likely that your version of OpenGL ({:?}.{:?}) is too old.",
+                    glow_gl.version().major,
+                    glow_gl.version().minor
+                );
+                println!("If not, please file a bug at https://github.com/servo/servo/issues.");
+            } else {
+                println!("Could not make the fallback {desired_api:?} context current.");
+                println!("Ensure that OpenGL is working on your system.");
+            }
             let _ = device.destroy_context(&mut context);
         },
         Err(_) => {
